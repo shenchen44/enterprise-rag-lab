@@ -1,5 +1,26 @@
-__pycache__
-storage
-.env
-output
+__pycache__/
+.pytest_cache/
+.venv/
+
+# Local runtime outputs
+storage/
+chroma_db/
+src/chroma_db/
+output/
 .ui/
+
+# Secrets
+.env
+.env.*
+src/.env
+src/.env.*
+
+# Regenerable benchmark data and vector stores
+data/
+ui/data/financebench/
+
+# Generated evaluation artifacts. Keep curated analysis markdown files only.
+reports/*.json
+reports/ragas_eval_*.md
+reports/financebench_eval*.md
+reports/rag_eval_report.md

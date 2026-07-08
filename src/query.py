@@ -1,9 +1,21 @@
-import os
 from typing import Any, Optional
 
 from llama_index.core.base.base_query_engine import BaseQueryEngine
 from llama_index.core.indices.base import BaseIndex
+from llama_index.core.query_engine import CustomQueryEngine
 from llama_index.core.tools.query_engine import QueryEngineTool
+
+from src.retrieval.hybrid import HybridRetriever, format_hits_as_evidence
+
+
+class HybridRAGQueryEngine(CustomQueryEngine):
+    """Query engine backed by Chroma vector search + BM25 + RRF + reranker."""
+
+    retriever: HybridRetriever
+
+    def custom_query(self, query_str: str) -> str:
+        hits = self.retriever.search(query_str)
+        return format_hits_as_evidence(query_str, hits)
 
 
 def create_query_engine(index: BaseIndex, **kwargs: Any) -> BaseQueryEngine:
@@ -13,12 +25,12 @@ def create_query_engine(index: BaseIndex, **kwargs: Any) -> BaseQueryEngine:
     Args:
         index: The index to create a query engine for.
         params (optional): Additional parameters for the query engine, e.g: similarity_top_k
-    """
-    top_k = int(os.getenv("TOP_K", 0))
-    if top_k != 0 and kwargs.get("filters") is None:
-        kwargs["similarity_top_k"] = top_k
 
-    return index.as_query_engine(**kwargs)
+    The `index` argument is kept for compatibility with the generated template,
+    but retrieval is handled by HybridRetriever directly against Chroma so the
+    flow is explicit and easy to study.
+    """
+    return HybridRAGQueryEngine(retriever=HybridRetriever())
 
 
 def get_query_engine_tool(
@@ -38,7 +50,12 @@ def get_query_engine_tool(
     if name is None:
         name = "query_index"
     if description is None:
-        description = "Use this tool to retrieve information from a knowledge base. Provide a specific query and can call the tool multiple times if necessary."
+        description = (
+            "Use this tool to retrieve cited evidence from the enterprise knowledge base. "
+            "It performs Chroma vector search, BM25 keyword search, RRF hybrid fusion, "
+            "and reranking. The output includes [citation:chunk_id] markers that must "
+            "be preserved in the final answer."
+        )
     query_engine = create_query_engine(index, **kwargs)
     tool = QueryEngineTool.from_defaults(
         query_engine=query_engine,

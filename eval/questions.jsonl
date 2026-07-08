@@ -1,0 +1,3 @@
+{"question": "What are the dimensional standards for letter-size mail?", "expected_sources": ["101.pdf"], "reference_answer": "Letter-size mail has minimum and maximum dimensions and weight limits defined in the document."}
+{"question": "What makes a letter-size mailpiece nonmachinable?", "expected_sources": ["101.pdf"], "reference_answer": "A letter-size piece is nonmachinable if it has characteristics such as an invalid aspect ratio, plastic wrapping, clasps, strings, buttons, or similar closure devices."}
+{"question": "What is the maximum weight for letter-size mail?", "expected_sources": ["101.pdf"], "reference_answer": "Letter-size mail is not more than 3.5 ounces."}

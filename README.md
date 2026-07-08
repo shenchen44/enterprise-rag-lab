@@ -4,6 +4,90 @@ This is a [LlamaIndex](https://www.llamaindex.ai/) project that using [Workflows
 
 LlamaDeploy is a system for deploying and managing LlamaIndex workflows, while LlamaIndexServer provides a pre-built TypeScript server with an integrated chat UI that can connect directly to LlamaDeploy deployments. This example shows how you can quickly set up a complete chat application by combining these two technologies/
 
+## Enterprise RAG Lab Extensions
+
+This project has been extended from the generated template into an enterprise-style
+RAG learning lab:
+
+- DeepSeek as the OpenAI-compatible LLM backend.
+- FastEmbed/BGE local embeddings.
+- Chroma persistent vector database.
+- Explicit ingestion pipeline with metadata, hash dedupe, and configurable chunking.
+- BM25 keyword retrieval + Chroma vector retrieval.
+- Reciprocal Rank Fusion (RRF) hybrid search.
+- Lightweight reranker interface.
+- Citation-preserving Agentic RAG workflow.
+- Retrieval evaluation with Hit Rate, MRR, and latency reports.
+
+Read [STUDY_GUIDE.md](STUDY_GUIDE.md) for the learning roadmap and module map.
+
+## FinanceBench Dataset
+
+This project uses FinanceBench as the first realistic benchmark because it
+contains real annual-report PDFs, financial questions, reference answers, and
+evidence pages. It is a better resume dataset than toy PDFs because it tests
+long-document ingestion, table-heavy retrieval, numerical reasoning evidence,
+and citation grounding.
+
+Prepare a lightweight local subset after cloning FinanceBench:
+
+```bash
+git clone --depth 1 https://github.com/patronus-ai/financebench.git /private/tmp/financebench
+uv run python scripts/prepare_financebench.py \
+  --source /private/tmp/financebench \
+  --doc-limit 5 \
+  --question-limit 20
+```
+
+The script copies selected PDFs into `ui/data/financebench/` and writes
+`eval/financebench_questions.jsonl`. The PDF directory is git-ignored because
+the dataset files are large and can be regenerated.
+
+Rebuild the RAG index and run retrieval evaluation:
+
+```bash
+uv run generate
+uv run python -m src.eval.run_eval \
+  --questions eval/financebench_questions.jsonl \
+  --output reports/financebench_eval_report.md \
+  --json-output reports/financebench_eval_report.json
+```
+
+## RAGAS Regression Gate
+
+After any retrieval, ingestion, reranking, prompt, or calculator change, compare the
+candidate RAGAS report against the current best baseline before treating it as an
+improvement. The regression gate separates target questions from non-target questions,
+so a local fix cannot hide broad correctness regressions.
+
+Example: compare a quick-ratio formula fallback run against the current best
+PDF-element-aware baseline:
+
+```bash
+uv run python scripts/compare_ragas_runs.py \
+  --baseline reports/ragas_eval_full_pdf_element_aware.json \
+  --candidate reports/ragas_eval_full_formula_fallback.json \
+  --target-pattern "quick ratio" \
+  --output reports/formula_fallback_regression_comparison.md \
+  --json-output reports/formula_fallback_regression_comparison.json \
+  --max-non-target-drop 0.01 \
+  --max-full-drop 0.0
+```
+
+Acceptance policy:
+
+- target questions should improve on `answer_correctness`;
+- non-target questions should not drop by more than `0.01`;
+- full-set `answer_correctness` should not drop;
+- failing candidates stay behind an experimental gate instead of becoming the default
+  pipeline.
+
+Current best observed full-run metrics are tracked in
+`reports/table_aware_rag_development_log.md`. As of the latest calculator experiment,
+`reports/ragas_eval_full_calculator_prompt_tightening.json` reached Faithfulness
+`0.8021`, Relevancy `0.6935`, and Correctness `0.5227`, but it still fails the strict
+non-target regression gate and remains experimental.
+
 ## Prerequisites
 
 If you haven't installed uv, you can follow the instructions [here](https://docs.astral.sh/uv/getting-started/installation/) to install it.

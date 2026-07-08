@@ -1,0 +1,13 @@
+allowBuilds:
+  canvas: true
+  es5-ext: true
+  esbuild: true
+  sharp: true
+  tree-sitter: true
+
+onlyBuiltDependencies:
+  - canvas
+  - es5-ext
+  - esbuild
+  - sharp
+  - tree-sitter
