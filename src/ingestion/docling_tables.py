@@ -92,6 +92,7 @@ class ExtractedTable:
     markdown: str
     surrounding_heading: str
     section_path: str = ""
+    page_number: int | None = None
 
     @property
     def retrieval_text(self) -> str:
@@ -102,7 +103,7 @@ class ExtractedTable:
 
     def metadata(self) -> dict:
         headers, row_labels = table_headers_and_row_labels(self.markdown)
-        return {
+        metadata = {
             "table_id": self.table_id,
             "source_path": self.source_path,
             "file_name": self.file_name,
@@ -115,6 +116,10 @@ class ExtractedTable:
             "retrieval_granularity": "table",
             "content_hash": sha256_text(self.markdown),
         }
+        if self.page_number is not None:
+            metadata["page_number"] = self.page_number
+            metadata["page_label"] = str(self.page_number)
+        return metadata
 
 
 @dataclass(slots=True)
@@ -129,6 +134,7 @@ class ExtractedTableRow:
     cells: dict[str, str]
     surrounding_heading: str
     section_path: str = ""
+    page_number: int | None = None
 
     @property
     def retrieval_text(self) -> str:
@@ -146,7 +152,7 @@ class ExtractedTableRow:
         )
 
     def metadata(self) -> dict:
-        return {
+        metadata = {
             "row_id": self.row_id,
             "table_id": self.table_id,
             "source_path": self.source_path,
@@ -159,6 +165,10 @@ class ExtractedTableRow:
             "retrieval_granularity": "table_row",
             "content_hash": sha256_text(json.dumps(self.cells, sort_keys=True)),
         }
+        if self.page_number is not None:
+            metadata["page_number"] = self.page_number
+            metadata["page_label"] = str(self.page_number)
+        return metadata
 
 
 @dataclass(slots=True)
@@ -309,6 +319,7 @@ def extract_rows_from_table(table: ExtractedTable) -> list[ExtractedTableRow]:
                 cells=cells,
                 surrounding_heading=table.surrounding_heading,
                 section_path=table.section_path,
+                page_number=table.page_number,
             )
         )
     return rows
@@ -440,13 +451,37 @@ def extract_markdown_tables(markdown: str, *, source_path: str) -> list[Extracte
     return tables
 
 
+def docling_table_page_numbers(document: dict) -> list[int | None]:
+    """Return the physical PDF page for each Docling table in document order."""
+    page_numbers: list[int | None] = []
+    for table in document.get("tables", []):
+        page_number = None
+        for provenance in table.get("prov", []):
+            value = provenance.get("page_no")
+            if isinstance(value, int) and value > 0:
+                page_number = value
+                break
+        page_numbers.append(page_number)
+    return page_numbers
+
+
+def load_docling_table_page_numbers(json_path: Path) -> list[int | None]:
+    if not json_path.exists():
+        return []
+    return docling_table_page_numbers(json.loads(json_path.read_text(encoding="utf-8")))
+
+
 def parse_docling_markdown_tables(markdown_dir: Path, pdf_dir: Path) -> list[ExtractedTable]:
     tables: list[ExtractedTable] = []
     for markdown_path in sorted(markdown_dir.glob("*.md")):
         pdf_path = pdf_dir / f"{markdown_path.stem}.pdf"
         source_path = str(pdf_path if pdf_path.exists() else markdown_path)
         markdown = markdown_path.read_text(encoding="utf-8")
-        tables.extend(extract_markdown_tables(markdown, source_path=source_path))
+        document_tables = extract_markdown_tables(markdown, source_path=source_path)
+        page_numbers = load_docling_table_page_numbers(markdown_path.with_suffix(".json"))
+        for table, page_number in zip(document_tables, page_numbers):
+            table.page_number = page_number
+        tables.extend(document_tables)
     return tables
 
 

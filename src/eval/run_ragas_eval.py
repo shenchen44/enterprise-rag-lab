@@ -18,6 +18,7 @@ from ragas.metrics._answer_relevance import answer_relevancy
 from ragas.metrics._faithfulness import faithfulness
 from llama_index.core import Settings
 
+from src.eval.retrieval_metrics import aggregate_retrieval_rows, retrieval_metrics_for_hits
 from src.eval.run_eval import load_questions
 from src.retrieval.financial_calculator import append_calculation_hit
 from src.retrieval.fusion import reciprocal_rank_fusion
@@ -445,9 +446,9 @@ def retrieve_for_generation(
 ) -> tuple[list[RetrievalHit], list[str]]:
     queries = expand_financial_queries(question) if use_query_expansion else [question]
     if len(queries) == 1:
-        hits = retriever.search(question)
+        hits = retriever.search(question, expand_queries=False)
     else:
-        ranked_lists = [retriever.search(query) for query in queries]
+        ranked_lists = [retriever.search(query, expand_queries=False) for query in queries]
         final_top_k = int(os.getenv("TOP_K", "5"))
         fused = reciprocal_rank_fusion(
             ranked_lists,
@@ -520,7 +521,7 @@ def retrieve_for_generation(
                 existing_ids.add(table_hit.node_id)
     if os.getenv("SOURCE_PERIOD_ROUTING_ENABLED", "false").lower() == "true":
         hits = rerank_by_source_period(question, hits)
-    if os.getenv("FINANCIAL_CALCULATOR_ENABLED", "false").lower() == "true":
+    if os.getenv("FINANCIAL_CALCULATOR_ENABLED", "true").lower() == "true":
         hits = append_calculation_hit(question, hits)
     if compress_contexts:
         hits = compress_hits_for_generation(question, hits)
@@ -634,6 +635,7 @@ def evaluate_generation(
 
             contexts = [hit.text for hit in hits]
             evidence = format_hits_as_evidence(question, hits)
+            retrieval_metrics = retrieval_metrics_for_hits(item, hits)
 
             gen_start = time.perf_counter()
             answer = generate_answer(question, evidence)
@@ -654,6 +656,7 @@ def evaluate_generation(
                     "index": idx,
                     "question": question,
                     "expected_sources": expected_sources,
+                    "expected_pages": item.get("expected_pages", []),
                     "reference_answer": reference,
                     "generated_answer": answer,
                     "generation_top_k": generation_top_k,
@@ -672,6 +675,7 @@ def evaluate_generation(
                         or "unknown"
                         for hit in hits
                     ],
+                    "retrieval_metrics": retrieval_metrics,
                     "citation_ids": [hit.citation_id for hit in hits],
                     "retrieval_ms": retrieval_ms,
                     "generation_ms": gen_ms,
@@ -831,12 +835,14 @@ def aggregate_result(
     table_top_k: int,
     evaluation_ms: int,
 ) -> dict:
+    retrieval_summary = aggregate_retrieval_rows(rows)
     return {
         "total": total,
         "scored": sum(1 for row in rows if row.get("answer_correctness") is not None),
         "faithfulness": average_metric(rows, "faithfulness"),
         "answer_relevancy": average_metric(rows, "answer_relevancy"),
         "answer_correctness": average_metric(rows, "answer_correctness"),
+        "retrieval": retrieval_summary,
         "generation_top_k": generation_top_k,
         "query_expansion": use_query_expansion,
         "neighbor_window": neighbor_window,
@@ -864,6 +870,16 @@ def write_report(result: dict, output: Path) -> None:
         lines.append(f"- **Answer Relevancy**: {result['answer_relevancy']:.3f}")
     if result["answer_correctness"] is not None:
         lines.append(f"- **Answer Correctness**: {result['answer_correctness']:.3f}")
+    retrieval_summary = result.get("retrieval", {})
+    if retrieval_summary:
+        lines.append(f"- Source Hit Rate: {_format_optional_metric(retrieval_summary.get('source_hit_rate'))}")
+        lines.append(f"- Source MRR: {_format_optional_metric(retrieval_summary.get('source_mrr'))}")
+        lines.append(f"- Page Hit Rate: {_format_optional_metric(retrieval_summary.get('page_hit_rate'))}")
+        lines.append(f"- Page MRR: {_format_optional_metric(retrieval_summary.get('page_mrr'))}")
+        lines.append(f"- Expected-page Recall: {_format_optional_metric(retrieval_summary.get('expected_page_recall'))}")
+        lines.append(
+            f"- Retrieved Reference-term Recall: {_format_optional_metric(retrieval_summary.get('reference_term_recall'))}"
+        )
     if result.get("generation_top_k") is not None:
         lines.append(f"- Generation top-k: {result['generation_top_k']}")
     lines.append(f"- Query expansion: {result.get('query_expansion', False)}")
@@ -887,6 +903,18 @@ def write_report(result: dict, output: Path) -> None:
             lines.append(f"- Answer Relevancy: {row['answer_relevancy']:.3f}")
         if row.get("answer_correctness") is not None:
             lines.append(f"- Answer Correctness: {row['answer_correctness']:.3f}")
+        retrieval_metrics = row.get("retrieval_metrics")
+        if retrieval_metrics:
+            lines.extend(
+                [
+                    f"- Source hit: {retrieval_metrics['source_hit']}",
+                    f"- Source first rank: {retrieval_metrics['source_first_rank']}",
+                    f"- Page hit: {retrieval_metrics['page_hit']}",
+                    f"- Page first rank: {retrieval_metrics['page_first_rank']}",
+                    f"- Expected-page recall: {_format_optional_metric(retrieval_metrics['expected_page_recall'])}",
+                    f"- Retrieved reference-term recall: {_format_optional_metric(retrieval_metrics['reference_term_recall'])}",
+                ]
+            )
         lines.extend(
             [
                 f"- Retrieval: {row['retrieval_ms']} ms",
@@ -912,6 +940,10 @@ def write_report(result: dict, output: Path) -> None:
             ]
         )
     output.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _format_optional_metric(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
 
 
 def main() -> None:
@@ -1031,6 +1063,7 @@ def main() -> None:
             "evaluation_ms",
         ]
     }
+    summary["retrieval"] = result.get("retrieval", {})
     print(json.dumps(summary, indent=2))
     print(f"Report written to {args.output}")
 

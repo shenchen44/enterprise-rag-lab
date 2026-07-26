@@ -26,12 +26,20 @@ QUICK_RATIO_ROW_PATTERNS: tuple[str, ...] = (
     r"total current liabilities",
 )
 
+EFFECTIVE_TAX_RATE_ROW_PATTERNS: tuple[str, ...] = (
+    r"^loss before income taxes$",
+    r"^income tax .*?(?:expense|benefit)",
+)
+
 
 def parse_number(value: str) -> float | None:
     cleaned = value.strip()
     if not cleaned or cleaned in {"-", "—", "n/a", "N/A"}:
         return None
-    negative = cleaned.startswith("(") and cleaned.endswith(")")
+    # Financial tables frequently render negative percentages as "(0.6)%".
+    # Parentheses still carry the sign even when a currency or percent suffix
+    # appears after the closing parenthesis.
+    negative = bool(re.match(r"^\s*\([^)]*\)", cleaned))
     cleaned = re.sub(r"[$,%()\s]", "", cleaned.replace(",", ""))
     try:
         number = float(cleaned)
@@ -346,12 +354,62 @@ def extract_liability_rows_from_markdown(path: Path) -> list[tuple[str, dict[str
     return rows
 
 
+def extract_effective_tax_rate_rows_from_markdown(path: Path) -> list[RetrievalHit]:
+    """Extract the two income-statement rows needed for an effective tax rate."""
+    rows: list[RetrievalHit] = []
+    current_years: list[str] = []
+
+    for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1):
+        if not line.lstrip().startswith("|"):
+            continue
+
+        years = re.findall(r"(?:19|20)\d{2}", line)
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        row_has_numeric_values = any(parse_number(cell) is not None for cell in cells[1:])
+        if len(years) >= 2 and (not row_has_numeric_values or is_year_header_row(cells, years)):
+            current_years = years
+            continue
+        if not current_years:
+            continue
+
+        parsed = parse_markdown_table_row(line, current_years)
+        if parsed is None:
+            continue
+        label, values = parsed
+        if not any(re.search(pattern, label.lower()) for pattern in EFFECTIVE_TAX_RATE_ROW_PATTERNS):
+            continue
+
+        cell_lines = "\n".join(f"- {year}: {value:g}" for year, value in values.items())
+        rows.append(
+            RetrievalHit(
+                node_id=f"formula_row:{path.stem}:{line_number}",
+                text=f"Row: {label}\nCells:\n{cell_lines}",
+                metadata={
+                    "chunk_id": f"formula_row:{path.stem}:{line_number}",
+                    "source_path": str(path),
+                    "retrieval_granularity": "formula_row",
+                },
+                score=1.5,
+                source="formula_fallback",
+                debug={"formula_fallback": "markdown_income_statement_tax_rate"},
+            )
+        )
+    return rows
+
+
 def build_formula_fallback_hits(question: str) -> list[RetrievalHit]:
-    if "quick ratio" not in question.lower() and not should_build_largest_liability_context(question):
+    if (
+        "quick ratio" not in question.lower()
+        and not should_build_largest_liability_context(question)
+        and not should_build_effective_tax_rate_context(question)
+    ):
         return []
     hits: list[RetrievalHit] = []
     for path in candidate_markdown_paths(question):
-        hits.extend(extract_formula_rows_from_markdown(path))
+        if "quick ratio" in question.lower():
+            hits.extend(extract_formula_rows_from_markdown(path))
+        if should_build_effective_tax_rate_context(question):
+            hits.extend(extract_effective_tax_rate_rows_from_markdown(path))
     return hits
 
 
@@ -421,6 +479,58 @@ def quick_ratio_guidance(question: str, ratios: list[tuple[str, float]]) -> list
 def should_build_largest_liability_context(question: str) -> bool:
     normalized = question.lower()
     return bool(re.search(r"largest liability", normalized) and re.search(r"balance sheet", normalized))
+
+
+def should_build_effective_tax_rate_context(question: str) -> bool:
+    return bool(re.search(r"effective (?:income )?tax rate", question.lower()))
+
+
+def build_effective_tax_rate_context(question: str, hits: list[RetrievalHit]) -> str:
+    if not should_build_effective_tax_rate_context(question):
+        return ""
+
+    parsed_rows = [
+        row
+        for hit in hits
+        if (row := extract_row_cells(hit)) is not None
+    ]
+    loss_before_tax = find_row(parsed_rows, (r"^loss before income taxes$",))
+    income_tax = find_row(parsed_rows, (r"^income tax .*?(?:expense|benefit)",))
+    if not loss_before_tax or not income_tax:
+        return ""
+
+    years = question_years(question)
+    if not years:
+        years = sorted(set(loss_before_tax[1]) & set(income_tax[1]), reverse=True)
+
+    lines = [
+        "Deterministic effective tax rate calculation aid:",
+        "- Formula convention: tax expense is positive and tax benefit is negative; divide it by the absolute loss before income taxes.",
+    ]
+    calculated_years: list[tuple[str, float]] = []
+    for year in years:
+        pre_tax_loss = loss_before_tax[1].get(year)
+        reported_tax = income_tax[1].get(year)
+        if pre_tax_loss in {None, 0} or reported_tax is None:
+            continue
+
+        normalized_tax = -reported_tax
+        rate = normalized_tax / abs(pre_tax_loss) * 100
+        lines.append(
+            f"- {year}: effective tax rate = {normalized_tax:g} / abs({pre_tax_loss:g}) x 100 = {rate:.3f}% "
+            f"[citation:{income_tax[2]}], [citation:{loss_before_tax[2]}]."
+        )
+        calculated_years.append((year, rate))
+
+    if not calculated_years:
+        return ""
+    lines.extend(
+        [
+            "Answer guidance:",
+            "- Compare the calculated rates directly. Do not substitute the filing's displayed rate when its sign convention differs from the question's formula.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def build_largest_liability_context(question: str, hits: list[RetrievalHit]) -> str:
@@ -552,7 +662,11 @@ def build_quick_ratio_context(question: str, hits: list[RetrievalHit]) -> str:
 
 
 def build_calculation_context(question: str, hits: list[RetrievalHit]) -> str:
-    calculators = [build_quick_ratio_context, build_largest_liability_context]
+    calculators = [
+        build_quick_ratio_context,
+        build_largest_liability_context,
+        build_effective_tax_rate_context,
+    ]
     sections = [
         section
         for calculator in calculators

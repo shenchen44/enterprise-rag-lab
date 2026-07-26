@@ -5,7 +5,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.docling_tables import (
     build_repeated_line_filter,
+    docling_table_page_numbers,
     extract_markdown_tables,
+    extract_rows_from_table,
     extract_markdown_text_blocks,
     table_profile,
 )
@@ -64,3 +66,23 @@ def test_table_profile_and_section_metadata() -> None:
     assert "columns=Metric, 2023, 2022" in table_profile(tables[0].markdown)
     assert "row_labels=Revenue, Operating income" in tables[0].retrieval_text
     assert tables[0].metadata()["table_row_count"] == 2
+
+
+def test_docling_table_page_is_propagated_to_table_rows() -> None:
+    markdown = """| Metric | 2023 |
+| --- | ---: |
+| Revenue | 100 |
+"""
+    table = extract_markdown_tables(markdown, source_path="sample.pdf")[0]
+    table.page_number = 27
+
+    row = extract_rows_from_table(table)[0]
+
+    assert table.metadata()["page_number"] == 27
+    assert row.metadata()["page_number"] == 27
+
+
+def test_docling_table_page_numbers_read_provenance() -> None:
+    document = {"tables": [{"prov": [{"page_no": 4}]}, {"prov": []}, {"prov": [{"page_no": 18}]}]}
+
+    assert docling_table_page_numbers(document) == [4, None, 18]

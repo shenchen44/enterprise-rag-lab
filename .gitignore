@@ -1,6 +1,7 @@
 __pycache__/
 .pytest_cache/
 .venv/
+.DS_Store
 
 # Local runtime outputs
 storage/
@@ -24,3 +25,7 @@ reports/*.json
 reports/ragas_eval_*.md
 reports/financebench_eval*.md
 reports/rag_eval_report.md
+reports/chunk_*.md
+reports/financebench_ragas_*.md
+reports/ragas_calculator_*.md
+reports/ragas_source_period_*.md

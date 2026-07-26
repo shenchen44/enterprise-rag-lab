@@ -17,7 +17,8 @@ RAG learning lab:
 - Reciprocal Rank Fusion (RRF) hybrid search.
 - Lightweight reranker interface.
 - Citation-preserving Agentic RAG workflow.
-- Retrieval evaluation with Hit Rate, MRR, and latency reports.
+- Three-layer RAG evaluation: ingestion integrity, retrieval effectiveness,
+  and RAGAS generation quality.
 
 Read [STUDY_GUIDE.md](STUDY_GUIDE.md) for the learning roadmap and module map.
 
@@ -53,6 +54,32 @@ uv run python -m src.eval.run_eval \
   --json-output reports/financebench_eval_report.json
 ```
 
+The retrieval report separates two pre-generation checks:
+
+- **Ingestion integrity**: checks expected-PDF availability, evidence-page
+  coverage, page metadata coverage, and chunk-size distribution.
+- **Retrieval effectiveness**: checks source hit rate/MRR, evidence-page hit
+  rate/MRR, expected-page recall@k, and how much of the reference answer's key
+  terms appear in the retrieved contexts.
+
+Use this before RAGAS when changing PDF parsing, chunk size/overlap, embeddings,
+hybrid retrieval, reranking, page retrieval, or table retrieval. RAGAS still
+answers "did the generated answer look faithful/relevant/correct"; this report
+answers "did ingestion preserve the evidence and did retrieval recall it."
+
+The default online retriever also appends page-level evidence after chunk-level
+hybrid retrieval:
+
+- `HYBRID_PAGE_TOP_K=10` adds the top page-level hits as supplemental context.
+- `PAGE_BM25_ENABLED=true` fuses page-level vector and BM25 results before adding page evidence.
+- `HYBRID_TABLE_TOP_K=3` adds table rows for numeric financial questions, filtered to the retrieved filings.
+- `FINANCIAL_CALCULATOR_ENABLED=true` appends deterministic evidence for supported financial calculations such as quick ratio and largest-liability questions.
+  This improves long-PDF evidence recall without sending the full page index
+  through the cross-encoder reranker.
+- `SOURCE_SWEEP_ENABLED=false` keeps the heavier source-focused chunk sweep off
+  by default. It can be enabled for experiments, but it is slower with BGE-style
+  cross-encoder rerankers.
+
 ## RAGAS Regression Gate
 
 After any retrieval, ingestion, reranking, prompt, or calculator change, compare the
@@ -81,12 +108,6 @@ Acceptance policy:
 - full-set `answer_correctness` should not drop;
 - failing candidates stay behind an experimental gate instead of becoming the default
   pipeline.
-
-Current best observed full-run metrics are tracked in
-`reports/table_aware_rag_development_log.md`. As of the latest calculator experiment,
-`reports/ragas_eval_full_calculator_prompt_tightening.json` reached Faithfulness
-`0.8021`, Relevancy `0.6935`, and Correctness `0.5227`, but it still fails the strict
-non-target regression gate and remains experimental.
 
 ## Prerequisites
 

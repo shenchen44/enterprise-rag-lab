@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+
 from llama_index.core import Settings
 
+from src.retrieval.bm25 import BM25Retriever
+from src.retrieval.fusion import reciprocal_rank_fusion
 from src.retrieval.types import RetrievalHit
 from src.vector_store import get_page_chroma_collection
 
@@ -15,8 +19,18 @@ class PageRetriever:
 
     def __init__(self) -> None:
         self.collection = get_page_chroma_collection()
+        data = self.collection.get(include=["documents", "metadatas"])
+        self.records = [
+            {"id": node_id, "text": text or "", "metadata": metadata or {}}
+            for node_id, text, metadata in zip(
+                data.get("ids") or [],
+                data.get("documents") or [],
+                data.get("metadatas") or [],
+            )
+        ]
+        self.bm25 = BM25Retriever(self.records)
 
-    def search(self, query: str, *, top_k: int) -> list[RetrievalHit]:
+    def vector_search(self, query: str, *, top_k: int) -> list[RetrievalHit]:
         if top_k <= 0 or self.collection.count() == 0:
             return []
 
@@ -50,3 +64,15 @@ class PageRetriever:
                 )
             )
         return hits
+
+    def search(self, query: str, *, top_k: int) -> list[RetrievalHit]:
+        vector_hits = self.vector_search(query, top_k=top_k)
+        if os.getenv("PAGE_BM25_ENABLED", "true").lower() != "true":
+            return vector_hits
+
+        bm25_hits = self.bm25.search(query, top_k=max(top_k * 2, top_k))
+        return reciprocal_rank_fusion(
+            [vector_hits, bm25_hits],
+            top_k=top_k,
+            rrf_k=int(os.getenv("RRF_K", "60")),
+        )
