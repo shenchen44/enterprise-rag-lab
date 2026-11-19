@@ -4,6 +4,7 @@ import math
 from collections import Counter
 
 from src.retrieval.tokenizer import tokenize
+from src.retrieval.request_context import RetrievalFilter
 from src.retrieval.types import RetrievalHit
 
 
@@ -39,10 +40,22 @@ class BM25Retriever:
             score += self._idf(token) * numerator / denominator
         return score
 
-    def search(self, query: str, *, top_k: int) -> list[RetrievalHit]:
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        retrieval_filter: RetrievalFilter | None = None,
+        granularity: str | None = None,
+    ) -> list[RetrievalHit]:
         query_tokens = tokenize(query)
         scored: list[tuple[int, float]] = []
-        for idx, _record in enumerate(self.records):
+        for idx, record in enumerate(self.records):
+            if retrieval_filter and not retrieval_filter.matches(
+                record["metadata"],
+                granularity=granularity,
+            ):
+                continue
             score = self._score_doc(query_tokens, idx)
             if score > 0:
                 scored.append((idx, score))
@@ -61,4 +74,3 @@ class BM25Retriever:
                 )
             )
         return hits
-

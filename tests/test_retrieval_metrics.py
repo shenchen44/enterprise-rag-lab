@@ -49,7 +49,7 @@ def test_retrieval_metrics_score_source_page_and_reference_terms() -> None:
     assert metrics["page_hit"] is True
     assert metrics["page_first_rank"] == 2
     assert metrics["expected_page_recall"] == 1.0
-    assert metrics["reference_term_recall"] > 0.5
+    assert metrics["lexical_reference_coverage"] > 0.5
     assert "litigation" in metrics["matched_reference_terms"]
 
 

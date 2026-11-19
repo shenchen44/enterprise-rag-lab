@@ -215,6 +215,23 @@ def test_largest_liability_context_selects_largest_line_item(tmp_path, monkeypat
     assert "Answer directly with 'Customer deposits'" in context
 
 
+def test_largest_liability_context_excludes_retrieved_total_row(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    hits = [
+        row_hit("total", "Total liabilities", {"2022": "$203,643"}),
+        row_hit("deposits", "Customer deposits", {"2022": "$110,239"}),
+        row_hit("debt", "Long-term debt", {"2022": "$42,573"}),
+    ]
+
+    context = build_calculation_context(
+        "What was the largest liability in American Express's Balance Sheet in 2022?",
+        hits,
+    )
+
+    assert "largest liability is Customer deposits at 110239" in context
+    assert "Compared liability line items: Customer deposits 110239" in context
+
+
 def test_build_effective_tax_rate_context_uses_consistent_signs() -> None:
     hits = [
         row_hit("pre-tax", "Loss before income taxes", {"2022": "($5,022)", "2021": "($5,033)"}),

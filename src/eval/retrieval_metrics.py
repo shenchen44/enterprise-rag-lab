@@ -176,7 +176,7 @@ def retrieval_metrics_for_hits(item: dict, hits: list[RetrievalHit]) -> dict:
     expected_pages = item.get("expected_pages", [])
     reference_terms = content_terms(item.get("reference_answer"), item.get("reference_justification"))
     retrieved_text = "\n".join(hit.text for hit in hits)
-    reference_recall, matched_terms = term_recall(reference_terms, retrieved_text)
+    lexical_coverage, matched_terms = term_recall(reference_terms, retrieved_text)
 
     source_rank = first_rank_for_source(hits, expected_sources)
     page_rank = first_rank_for_page(hits, expected_sources, expected_pages)
@@ -198,7 +198,7 @@ def retrieval_metrics_for_hits(item: dict, hits: list[RetrievalHit]) -> dict:
         "page_reciprocal_rank": 1.0 / page_rank if page_rank else (0.0 if expected_pages else None),
         "expected_page_recall": page_recall,
         "expected_pages_covered": sorted(covered_pages),
-        "reference_term_recall": reference_recall,
+        "lexical_reference_coverage": lexical_coverage,
         "reference_terms": reference_terms,
         "matched_reference_terms": matched_terms,
     }
@@ -237,7 +237,9 @@ def aggregate_retrieval_rows(rows: list[dict]) -> dict:
         "page_hit_rate": _rate(metric.get("page_hit") for metric in metrics),
         "page_mrr": _average(metric.get("page_reciprocal_rank") for metric in metrics),
         "expected_page_recall": _average(metric.get("expected_page_recall") for metric in metrics),
-        "reference_term_recall": _average(metric.get("reference_term_recall") for metric in metrics),
+        "lexical_reference_coverage": _average(
+            metric.get("lexical_reference_coverage") for metric in metrics
+        ),
     }
 
 

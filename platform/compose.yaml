@@ -1,0 +1,21 @@
+name: enterprise-rag-platform
+services:
+  mysql:
+    image: mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
+    restart: unless-stopped
+    ports: ["127.0.0.1:${MYSQL_PORT:-3308}:3306"]
+    environment:
+      MYSQL_DATABASE: rag_platform
+      MYSQL_USER: ${PLATFORM_DB_USER:-rag}
+      MYSQL_PASSWORD: ${PLATFORM_DB_PASSWORD:?required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?required}
+    volumes: ["mysql_data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql -h127.0.0.1 -u\"$$MYSQL_USER\" rag_platform -Nse 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 25
+      start_period: 30s
+    mem_limit: 1g
+volumes:
+  mysql_data:

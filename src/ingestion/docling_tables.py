@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from llama_index.core import Settings
 
+from src.retrieval.source_period import governance_metadata
 from src.vector_store import get_table_chroma_collection
 
 MarkdownTableRecord = "ExtractedTable | ExtractedTableRow"
@@ -20,10 +20,6 @@ def sha256_text(text: str) -> str:
 
 def clean_cell(value: str) -> str:
     return re.sub(r"\s+", " ", value.replace("<br>", " ").strip())
-
-
-def normalize_repeated_line(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
 def heading_level(line: str) -> int:
@@ -49,40 +45,6 @@ def section_path_from_stack(stack: list[tuple[int, str]]) -> str:
     return " > ".join(title for _level, title in stack if title)
 
 
-def build_repeated_line_filter(markdown: str, *, min_repetitions: int = 5) -> set[str]:
-    """Approximate header/footer removal from Markdown by repeated short lines.
-
-    Docling Markdown does not expose page coordinates, so this is a conservative
-    fallback for repeated page furniture such as company names, form labels, and
-    page numbers. It only targets short non-table lines that repeat many times.
-    """
-    counter: Counter[str] = Counter()
-    for line in markdown.splitlines():
-        stripped = clean_cell(line)
-        if not stripped or is_markdown_table_line(stripped) or is_markdown_table_separator(stripped):
-            continue
-        if stripped.startswith("#"):
-            stripped = heading_text(stripped)
-        if len(stripped) > 120:
-            continue
-        normalized = normalize_repeated_line(stripped)
-        if len(normalized) < 3 or normalized.isdigit():
-            continue
-        counter[normalized] += 1
-    return {line for line, count in counter.items() if count >= min_repetitions}
-
-
-def is_repeated_noise_line(line: str, repeated_lines: set[str]) -> bool:
-    if not repeated_lines:
-        return False
-    stripped = clean_cell(line)
-    if stripped.startswith("#"):
-        stripped = heading_text(stripped)
-    if len(stripped) > 120:
-        return False
-    return normalize_repeated_line(stripped) in repeated_lines
-
-
 @dataclass(slots=True)
 class ExtractedTable:
     table_id: str
@@ -105,6 +67,8 @@ class ExtractedTable:
         headers, row_labels = table_headers_and_row_labels(self.markdown)
         metadata = {
             "table_id": self.table_id,
+            "parent_id": self.table_id,
+            "parent_type": "table",
             "source_path": self.source_path,
             "file_name": self.file_name,
             "table_index": self.table_index,
@@ -119,6 +83,7 @@ class ExtractedTable:
         if self.page_number is not None:
             metadata["page_number"] = self.page_number
             metadata["page_label"] = str(self.page_number)
+        metadata.update(governance_metadata(metadata))
         return metadata
 
 
@@ -155,6 +120,8 @@ class ExtractedTableRow:
         metadata = {
             "row_id": self.row_id,
             "table_id": self.table_id,
+            "parent_id": self.table_id,
+            "parent_type": "table",
             "source_path": self.source_path,
             "file_name": self.file_name,
             "table_index": self.table_index,
@@ -168,36 +135,8 @@ class ExtractedTableRow:
         if self.page_number is not None:
             metadata["page_number"] = self.page_number
             metadata["page_label"] = str(self.page_number)
+        metadata.update(governance_metadata(metadata))
         return metadata
-
-
-@dataclass(slots=True)
-class ExtractedTextBlock:
-    block_id: str
-    source_path: str
-    file_name: str
-    block_index: int
-    text: str
-    surrounding_heading: str
-    section_path: str = ""
-
-    @property
-    def retrieval_text(self) -> str:
-        heading = f"Heading: {self.surrounding_heading}\n" if self.surrounding_heading else ""
-        section = f"Section: {self.section_path}\n" if self.section_path else ""
-        return f"{section}{heading}Source: {self.file_name}\nText:\n{self.text}"
-
-    def metadata(self) -> dict:
-        return {
-            "block_id": self.block_id,
-            "source_path": self.source_path,
-            "file_name": self.file_name,
-            "block_index": self.block_index,
-            "surrounding_heading": self.surrounding_heading,
-            "section_path": self.section_path,
-            "retrieval_granularity": "docling_text",
-            "content_hash": sha256_text(self.text),
-        }
 
 
 def convert_pdf_with_docling(pdf_path: Path, output_dir: Path) -> dict:
@@ -333,80 +272,6 @@ def expand_tables_with_rows(tables: list[ExtractedTable]) -> list[ExtractedTable
     return records
 
 
-def text_block_is_useful(text: str) -> bool:
-    if len(text) < 80:
-        return False
-    has_number = bool(re.search(r"\d|\$|%", text))
-    has_finance_term = bool(
-        re.search(
-            r"repurchas|inventor|expense|sales|revenue|income|cash|assets|liabilities|"
-            r"margin|quarter|fiscal|store|capital|depreciation|amortization",
-            text,
-            re.I,
-        )
-    )
-    return has_number and has_finance_term
-
-
-def extract_markdown_text_blocks(
-    markdown: str,
-    *,
-    source_path: str,
-    repeated_lines: set[str] | None = None,
-) -> list[ExtractedTextBlock]:
-    blocks: list[ExtractedTextBlock] = []
-    current: list[str] = []
-    last_heading = ""
-    heading_stack: list[tuple[int, str]] = []
-    in_table = False
-    repeated_lines = repeated_lines or set()
-
-    def flush() -> None:
-        if not current:
-            return
-        text = clean_cell(" ".join(current))
-        current.clear()
-        if not text_block_is_useful(text):
-            return
-        block_index = len(blocks)
-        path = Path(source_path)
-        block_id = sha256_text(f"{source_path}:text:{block_index}:{sha256_text(text)}")[:24]
-        blocks.append(
-            ExtractedTextBlock(
-                block_id=block_id,
-                source_path=source_path,
-                file_name=path.name,
-                block_index=block_index,
-                text=text,
-                surrounding_heading=last_heading,
-                section_path=section_path_from_stack(heading_stack),
-            )
-        )
-
-    for line in markdown.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            flush()
-            in_table = False
-            continue
-        if stripped.startswith("#"):
-            flush()
-            heading_stack = update_heading_stack(heading_stack, stripped)
-            last_heading = heading_text(stripped)
-            continue
-        if is_markdown_table_line(stripped) or is_markdown_table_separator(stripped):
-            flush()
-            in_table = True
-            continue
-        if in_table:
-            continue
-        if is_repeated_noise_line(stripped, repeated_lines):
-            continue
-        current.append(stripped)
-    flush()
-    return blocks
-
-
 def extract_markdown_tables(markdown: str, *, source_path: str) -> list[ExtractedTable]:
     lines = markdown.splitlines()
     tables: list[ExtractedTable] = []
@@ -485,34 +350,14 @@ def parse_docling_markdown_tables(markdown_dir: Path, pdf_dir: Path) -> list[Ext
     return tables
 
 
-def parse_docling_markdown_text_blocks(markdown_dir: Path, pdf_dir: Path) -> list[ExtractedTextBlock]:
-    blocks: list[ExtractedTextBlock] = []
-    for markdown_path in sorted(markdown_dir.glob("*.md")):
-        pdf_path = pdf_dir / f"{markdown_path.stem}.pdf"
-        source_path = str(pdf_path if pdf_path.exists() else markdown_path)
-        markdown = markdown_path.read_text(encoding="utf-8")
-        repeated_lines = build_repeated_line_filter(markdown)
-        blocks.extend(
-            extract_markdown_text_blocks(
-                markdown,
-                source_path=source_path,
-                repeated_lines=repeated_lines,
-            )
-        )
-    return blocks
-
-
 def build_table_index(
     tables: list[ExtractedTable],
     *,
-    text_blocks: list[ExtractedTextBlock] | None = None,
     reset: bool = True,
-    batch_size: int = 16,
-    include_rows: bool = True,
+    batch_size: int = 128,
 ) -> dict:
     collection = get_table_chroma_collection(reset=reset)
-    records = expand_tables_with_rows(tables) if include_rows else list(tables)
-    records.extend(text_blocks or [])
+    records = expand_tables_with_rows(tables)
     for start in range(0, len(records), batch_size):
         batch = records[start : start + batch_size]
         texts = [record.retrieval_text for record in batch]
@@ -521,8 +366,6 @@ def build_table_index(
             ids=[
                 record.row_id
                 if isinstance(record, ExtractedTableRow)
-                else record.block_id
-                if isinstance(record, ExtractedTextBlock)
                 else record.table_id
                 for record in batch
             ],
@@ -535,7 +378,6 @@ def build_table_index(
     return {
         "table_count": len(tables),
         "table_row_count": sum(1 for record in records if isinstance(record, ExtractedTableRow)),
-        "text_block_count": len(text_blocks or []),
         "indexed_record_count": len(records),
         "collection_count": collection.count(),
     }

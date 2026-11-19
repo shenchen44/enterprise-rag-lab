@@ -481,6 +481,14 @@ def should_build_largest_liability_context(question: str) -> bool:
     return bool(re.search(r"largest liability", normalized) and re.search(r"balance sheet", normalized))
 
 
+def is_liability_aggregate(row_label: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", row_label.lower()).strip()
+    return bool(
+        re.match(r"^total liabilities(?:\b|$)", normalized)
+        or re.match(r"^liabilities and (?:shareholders|stockholders) equity\b", normalized)
+    )
+
+
 def should_build_effective_tax_rate_context(question: str) -> bool:
     return bool(re.search(r"effective (?:income )?tax rate", question.lower()))
 
@@ -555,6 +563,8 @@ def build_largest_liability_context(question: str, hits: list[RetrievalHit]) -> 
     year = years[0]
     candidates: list[tuple[str, float, str]] = []
     for row_label, values, citation_id in rows:
+        if is_liability_aggregate(row_label):
+            continue
         value = values.get(year)
         if value is None:
             continue

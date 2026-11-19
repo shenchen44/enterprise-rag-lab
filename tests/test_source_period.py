@@ -13,11 +13,20 @@ from src.retrieval.types import RetrievalHit
 
 
 def test_parse_query_scope_normalizes_company_and_year() -> None:
-    scope = parse_query_scope("What drove operating margin change as of the FY22 for AMEX?")
+    scope = parse_query_scope(
+        "What drove operating margin change in AMEX's FY22 10-K?"
+    )
 
     assert scope.company == "americanexpress"
     assert scope.fiscal_years == frozenset({2022})
     assert scope.annual_requested is True
+
+
+def test_fiscal_year_does_not_force_a_ten_k() -> None:
+    scope = parse_query_scope("What drove SG&A expense in FY2023?")
+
+    assert scope.fiscal_years == frozenset({2023})
+    assert scope.annual_requested is False
 
 
 def test_parse_source_profile_from_financebench_file_name() -> None:
@@ -60,7 +69,10 @@ def test_source_period_routing_prefers_matching_annual_source() -> None:
     ]
 
     try:
-        routed = rerank_by_source_period("Is 3M a capital-intensive business based on FY2022 data?", hits)
+        routed = rerank_by_source_period(
+            "According to 3M's FY2022 10-K, is the business capital intensive?",
+            hits,
+        )
     finally:
         if previous is None:
             os.environ.pop("SOURCE_PERIOD_FILTER_ENABLED", None)

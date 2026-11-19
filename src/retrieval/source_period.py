@@ -21,6 +21,16 @@ COMPANY_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+def normalize_company_key(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return ""
+    for company, patterns in COMPANY_ALIASES.items():
+        if any(re.search(pattern, normalized) for pattern in patterns):
+            return company
+    return re.sub(r"[^a-z0-9]+", "", normalized)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceProfile:
     company: str = ""
@@ -76,6 +86,26 @@ def parse_source_profile(metadata: dict) -> SourceProfile:
     )
 
 
+def governance_metadata(metadata: dict) -> dict:
+    """Return scalar metadata used by all pre-retrieval access and scope filters."""
+    profile = parse_source_profile(metadata)
+    governed = {
+        "tenant_id": str(metadata.get("tenant_id") or "default"),
+        "acl_scope": str(metadata.get("acl_scope") or "public"),
+        "document_version": int(metadata.get("document_version") or 1),
+        "company_key": profile.company,
+        "form_type": profile.form_type,
+    }
+    if profile.fiscal_year is not None:
+        governed["fiscal_year"] = profile.fiscal_year
+    if profile.quarter is not None:
+        governed["quarter"] = profile.quarter
+    for key in ("valid_from_epoch", "valid_to_epoch"):
+        if metadata.get(key) is not None:
+            governed[key] = int(metadata[key])
+    return governed
+
+
 def parse_query_scope(question: str) -> QueryScope:
     normalized = question.lower()
     company = ""
@@ -98,7 +128,7 @@ def parse_query_scope(question: str) -> QueryScope:
         quarter = int(next(group for group in quarter_match.groups() if group))
 
     annual_requested = bool(
-        re.search(r"\bfy\s*[0-9]{2,4}\b|fiscal year|annual|10-k|10k", normalized)
+        re.search(r"\bannual(?: report| filing)?\b|10-k|10k", normalized)
     ) and quarter is None
 
     return QueryScope(

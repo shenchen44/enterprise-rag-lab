@@ -1,4 +1,39 @@
-# LlamaIndex Workflow Example
+# Enterprise RAG Lab
+
+企业财报 RAG 研究平台：React / TypeScript 前端、Spring Boot 业务后端、Python 检索服务与 MySQL。
+
+![研究工作台](platform/docs/overview.png)
+
+## 全栈平台
+
+- 注册登录、JWT 与退出失效，按用户隔离会话、文档和任务。
+- 财报目录、私有文档上传解析、文件预览、会话管理、来源与页码查看。
+- REST / SSE 跨语言调用、实时执行状态、幂等请求、取消与中断处理。
+- 真实 FinanceBench / RAGAS 实验对比、逐题检查、任务记录。
+- 原检索与证据门控算法保留，新增应用代码集中在 `platform/`。
+
+### 本地运行
+
+安装 JDK 21、Maven、Node.js 与 Docker Desktop。准备原 Python 环境后：
+
+```bash
+uv sync --extra dev
+uv pip install --python .venv/bin/python -r platform/agent_service/requirements.txt
+python3 platform/scripts/platform.py build
+python3 platform/scripts/platform.py start
+```
+
+访问 **http://127.0.0.1:9080**。本地演示账号 `demo@raglab.local`，密码 `RagLab2026!`。
+
+数据库密码、JWT 密钥和内部凭证在首次启动时随机生成，仅保存于 git 忽略的 `platform/.env`。源码不包含真实密钥、用户上传资料、数据库、向量索引或模型权重。
+
+没有模型凭证也可上传文档并使用证据预览。模型问答需配置本地 `src/.env`，认证失败会明确报错，不会返回模拟生成结果。公开部署前请关闭演示账号并配置 HTTPS。
+
+FinanceBench PDF 和原向量索引不随仓库分发；可按下方数据准备步骤恢复，也可先上传个人测试文档验证平台。页面对比所需的六份固定评测报告已随代码保留。
+
+完整说明：[平台 README](platform/README.md) · [验证记录](platform/docs/verification.md)
+
+## 原 RAG 研究项目说明
 
 This is a [LlamaIndex](https://www.llamaindex.ai/) project that using [Workflows](https://docs.llamaindex.ai/en/stable/understanding/workflows/) deployed with [LlamaDeploy](https://github.com/run-llama/llama_deploy).
 
@@ -13,14 +48,31 @@ RAG learning lab:
 - FastEmbed/BGE local embeddings.
 - Chroma persistent vector database.
 - Explicit ingestion pipeline with metadata, hash dedupe, and configurable chunking.
+- Two-level text chunks: 384-token children are indexed for retrieval, while
+  complete 1024-token parents are persisted for generation.
 - BM25 keyword retrieval + Chroma vector retrieval.
 - Reciprocal Rank Fusion (RRF) hybrid search.
-- Lightweight reranker interface.
+- BGE cross-encoder reranking behind a stable reranker interface.
+- Pre-retrieval tenant, ACL, company, fiscal-period, document-type, and version
+  filtering shared by lexical and vector retrieval.
+- Parent-child retrieval: retrieve fine-grained chunks or table rows, then return
+  their complete parent chunk or parent table with structural boundaries preserved.
+- Structure-aware context packing with a global evidence budget, novelty control,
+  and source/period metadata constraints to reduce cross-filing conflicts.
+- Table-atomic evidence handling: headers and adjacent matching rows stay together;
+  table rows use their own BM25/vector/RRF path and tables are never sentence-compressed.
+- A non-vector structured-data gateway for current facts, with a parameterized
+  SQLite reference adapter and a protocol for production SQL/API adapters.
+- Evidence-slot fulfillment, metadata/value conflict detection, and a four-state
+  `answered / qualified / conflict / insufficient` generation gate.
 - Citation-preserving Agentic RAG workflow.
 - Three-layer RAG evaluation: ingestion integrity, retrieval effectiveness,
   and RAGAS generation quality.
 
 Read [STUDY_GUIDE.md](STUDY_GUIDE.md) for the learning roadmap and module map.
+The system's retrieval objective, layered data architecture, capability boundaries,
+and evidence-gating contract are defined in
+[docs/rag_top_level_design.md](docs/rag_top_level_design.md).
 
 ## FinanceBench Dataset
 
@@ -54,31 +106,95 @@ uv run python -m src.eval.run_eval \
   --json-output reports/financebench_eval_report.json
 ```
 
-The retrieval report separates two pre-generation checks:
+The retrieval report separates three pre-generation checks:
 
 - **Ingestion integrity**: checks expected-PDF availability, evidence-page
   coverage, page metadata coverage, and chunk-size distribution.
-- **Retrieval effectiveness**: checks source hit rate/MRR, evidence-page hit
-  rate/MRR, expected-page recall@k, and how much of the reference answer's key
-  terms appear in the retrieved contexts.
+- **Pre-assembly retrieval**: measures all fine-grained child-chunk and table-row
+  results selected by the retrieval plan before structural expansion.
+- **Assembled evidence retrieval**: measures the parent-chunk and parent-table
+  evidence sent to generation, including source hit/MRR, evidence-page hit/MRR,
+  and expected-page recall derived from retained metadata. Lexical reference
+  coverage is reported only as a lightweight bad-case diagnostic, not as
+  semantic evidence recall.
 
 Use this before RAGAS when changing PDF parsing, chunk size/overlap, embeddings,
-hybrid retrieval, reranking, page retrieval, or table retrieval. RAGAS still
+hybrid retrieval, reranking, parent-child expansion, or table retrieval. RAGAS still
 answers "did the generated answer look faithful/relevant/correct"; this report
 answers "did ingestion preserve the evidence and did retrieval recall it."
 
-The default online retriever also appends page-level evidence after chunk-level
-hybrid retrieval:
+RAGAS evaluates generated answers with faithfulness, answer relevancy, answer
+correctness, context precision, context recall, and irrelevant-context noise
+sensitivity. Together, the two reports separate evidence availability, retrieval,
+and final-answer quality.
 
-- `HYBRID_PAGE_TOP_K=10` adds the top page-level hits as supplemental context.
-- `PAGE_BM25_ENABLED=true` fuses page-level vector and BM25 results before adding page evidence.
-- `HYBRID_TABLE_TOP_K=3` adds table rows for numeric financial questions, filtered to the retrieved filings.
-- `FINANCIAL_CALCULATOR_ENABLED=true` appends deterministic evidence for supported financial calculations such as quick ratio and largest-liability questions.
-  This improves long-PDF evidence recall without sending the full page index
-  through the cross-encoder reranker.
-- `SOURCE_SWEEP_ENABLED=false` keeps the heavier source-focused chunk sweep off
-  by default. It can be enabled for experiments, but it is slower with BGE-style
-  cross-encoder rerankers.
+Planner output is stored per question in the JSON report. Reuse the exact plans
+when comparing retrieval execution changes:
+
+```bash
+uv run python -m src.eval.run_eval \
+  --questions eval/financebench_questions.jsonl \
+  --plans-input reports/financebench_eval_report.json \
+  --output reports/financebench_plan_replay.md \
+  --json-output reports/financebench_plan_replay.json
+```
+
+Run the complete generation evaluation with resumable five-question batches:
+
+```bash
+uv run python -m src.eval.run_ragas_eval \
+  --questions eval/financebench_questions.jsonl \
+  --plans-input reports/financebench_eval_report.json \
+  --output reports/ragas_eval_report.md \
+  --json-output reports/ragas_eval_report.json \
+  --checkpoint-output reports/ragas_eval_checkpoint.json \
+  --ragas-batch-size 5
+```
+
+Add `--resume` to continue from the checkpoint after an interrupted run. RAGAS
+telemetry is disabled by the evaluator; only the configured judge model receives
+the evaluation prompts required for scoring.
+
+The generation retriever follows one fixed evidence path:
+
+- an LLM retrieval planner emits a validated intent, metadata scope, evidence
+  slots, selected tools, and short retriever-specific semantic queries;
+- a deterministic executor runs only the selected chunk, table, structured-data,
+  and calculator tools, with a bounded broad-retrieval fallback when planning fails;
+- application-owned request context applies tenant, ACL, scope, time, and version
+  constraints before candidates can participate in BM25/vector ranking;
+- vector and BM25 results from the original question and planned queries are
+  fused with RRF and reranked once;
+- selected table queries retrieve short rows, rerank those rows, and return the
+  matching parent-table window with its header;
+- child chunks are the searchable units, while their complete persisted parent
+  chunks are returned for generation;
+- source and period metadata constraints are applied before the final context is
+  packed under one budget.
+- the assembled context is checked against each required evidence slot before the
+  generator receives an answer permission state.
+
+Runtime access context is configured by the serving layer. Local defaults are:
+
+```dotenv
+RAG_TENANT_ID=default
+RAG_PRINCIPAL_ID=anonymous
+RAG_ACL_SCOPES=public
+RAG_DOCUMENT_VERSION=1
+STRUCTURED_DATA_DB=
+```
+
+When `STRUCTURED_DATA_DB` is set, the reference adapter reads a
+`structured_facts` SQLite table containing `id`, `tenant_id`, `acl_scope`,
+`company_key`, `fiscal_year`, `quarter`, `metric`, `value`, `unit`,
+`source_system`, `observed_at`, `valid_from_epoch`, and `valid_to_epoch`.
+These records remain outside Chroma and are filtered with parameterized SQL.
+
+Before generation, retrieved candidates are metadata-constrained when the question
+names a company, fiscal year, quarter, or annual filing. Fine-grained hits are then
+expanded to their complete parent chunk or parent table and packed jointly under one context
+budget. This avoids per-hit sentence compression, which can split table headers
+from values or drop the context needed to reconcile related statements.
 
 ## RAGAS Regression Gate
 

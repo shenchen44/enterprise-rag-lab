@@ -5,17 +5,22 @@ from llama_index.core.indices.base import BaseIndex
 from llama_index.core.query_engine import CustomQueryEngine
 from llama_index.core.tools.query_engine import QueryEngineTool
 
-from src.retrieval.hybrid import HybridRetriever, format_hits_as_evidence
+from src.retrieval.evidence import EvidenceRetriever
+from src.retrieval.hybrid import format_hits_as_evidence
 
 
 class HybridRAGQueryEngine(CustomQueryEngine):
     """Query engine backed by Chroma vector search + BM25 + RRF + reranker."""
 
-    retriever: HybridRetriever
+    retriever: EvidenceRetriever
 
     def custom_query(self, query_str: str) -> str:
-        hits = self.retriever.search(query_str)
-        return format_hits_as_evidence(query_str, hits)
+        result = self.retriever.retrieve(query_str)
+        return format_hits_as_evidence(
+            query_str,
+            result.hits,
+            package=result.package,
+        )
 
 
 def create_query_engine(index: BaseIndex, **kwargs: Any) -> BaseQueryEngine:
@@ -30,7 +35,7 @@ def create_query_engine(index: BaseIndex, **kwargs: Any) -> BaseQueryEngine:
     but retrieval is handled by HybridRetriever directly against Chroma so the
     flow is explicit and easy to study.
     """
-    return HybridRAGQueryEngine(retriever=HybridRetriever())
+    return HybridRAGQueryEngine(retriever=EvidenceRetriever())
 
 
 def get_query_engine_tool(

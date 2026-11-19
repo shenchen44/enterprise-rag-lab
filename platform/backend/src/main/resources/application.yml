@@ -1,0 +1,43 @@
+server:
+  address: ${PLATFORM_BIND:127.0.0.1}
+  port: ${JAVA_PORT:9080}
+  error:
+    include-message: never
+spring:
+  application:
+    name: enterprise-rag-platform
+  datasource:
+    url: ${PLATFORM_JDBC_URL:jdbc:mysql://127.0.0.1:3308/rag_platform?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC}
+    username: ${PLATFORM_DB_USER:rag}
+    password: ${PLATFORM_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 8
+      connection-timeout: 10000
+  sql:
+    init:
+      mode: always
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+  mvc:
+    async:
+      request-timeout: 240000
+  web:
+    resources:
+      static-locations: ${FRONTEND_DIST:file:../frontend/dist/}
+agent:
+  url: ${AGENT_URL:http://127.0.0.1:9081}
+  token: ${AGENT_INTERNAL_TOKEN:}
+platform:
+  jwt-secret: ${PLATFORM_JWT_SECRET:}
+  storage: ${PLATFORM_STORAGE:../storage}
+  rag-root: ${RAG_PROJECT_ROOT:../..}
+  demo: ${PLATFORM_DEMO:true}
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
+logging:
+  level:
+    root: WARN
+    lab.platform: INFO

@@ -28,12 +28,16 @@ def generate_index():
 
     logger.info("Creating new Chroma-backed index")
     data_dir = os.environ.get("DATA_DIR", "ui/data")
-    chunk_size = int(os.environ.get("CHUNK_SIZE", "512"))
-    chunk_overlap = int(os.environ.get("CHUNK_OVERLAP", "80"))
+    chunk_size = int(os.environ.get("CHUNK_SIZE", "384"))
+    chunk_overlap = int(os.environ.get("CHUNK_OVERLAP", "64"))
+    parent_chunk_size = int(os.environ.get("PARENT_CHUNK_SIZE", "1024"))
+    parent_chunk_overlap = int(os.environ.get("PARENT_CHUNK_OVERLAP", "120"))
     nodes = run_ingestion(
         data_dir,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        parent_chunk_size=parent_chunk_size,
+        parent_chunk_overlap=parent_chunk_overlap,
     )
     vector_store = get_vector_store(reset=True)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
